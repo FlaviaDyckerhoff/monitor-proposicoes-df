@@ -1,0 +1,12 @@
+{
+  "name": "monitor-proposicoes-df",
+  "version": "1.0.0",
+  "description": "Monitor automático de proposições da Câmara Legislativa do DF",
+  "main": "monitor.js",
+  "scripts": {
+    "start": "node monitor.js"
+  },
+  "dependencies": {
+    "nodemailer": "^6.9.0"
+  }
+}
