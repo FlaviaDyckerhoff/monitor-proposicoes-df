@@ -7,6 +7,7 @@ const EMAIL_SENHA = process.env.EMAIL_SENHA;
 const ARQUIVO_ESTADO = 'estado.json';
 
 // URL base da CLDF — servidor Liferay, retorna HTML estático (sem reCAPTCHA)
+const SITE_ORIGIN = 'https://www.cl.df.gov.br';
 const BASE_URL = 'https://www.cl.df.gov.br/pt/web/guest/projetos';
 
 function carregarEstado() {
@@ -39,7 +40,7 @@ async function enviarEmail(novas) {
     const rows = porTipo[tipo].map(p =>
       `<tr>
         <td style="padding:8px;border-bottom:1px solid #eee;color:#555;font-size:12px">${p.tipo || '-'}</td>
-        <td style="padding:8px;border-bottom:1px solid #eee"><strong>${p.numero || '-'}/${p.ano || '-'}</strong></td>
+        <td style="padding:8px;border-bottom:1px solid #eee"><strong><a href="${p.url || BASE_URL}" style="color:#1a3a5c;text-decoration:none">${p.numero || '-'}/${p.ano || '-'}</a></strong></td>
         <td style="padding:8px;border-bottom:1px solid #eee;font-size:12px">${p.autor || '-'}</td>
         <td style="padding:8px;border-bottom:1px solid #eee;font-size:12px;white-space:nowrap">${p.data || '-'}</td>
         <td style="padding:8px;border-bottom:1px solid #eee;font-size:12px">${p.ementa || '-'}</td>
@@ -97,6 +98,9 @@ function parseHTML(html) {
     // Só processa blocos que contenham link para /proposicao/
     if (!bloco.includes('/proposicao/-/documentos/')) continue;
 
+    const hrefMatch = bloco.match(/href=["']([^"']*\/proposicao\/-\/documentos\/[^"']+)["']/i);
+    const url = hrefMatch ? new URL(hrefMatch[1], SITE_ORIGIN).href : BASE_URL;
+
     // Extrai código (ex: PL 2257/2026, IND 10130/2026)
     const codigoMatch = bloco.match(/([A-ZÁÉÍÓÚ]{2,10}(?:\s+DE\s+[A-Z]+)?)\s+(\d+)\/(\d{4})/);
     if (!codigoMatch) continue;
@@ -137,7 +141,7 @@ function parseHTML(html) {
 
     const id = `${tipo}-${numero}-${ano}`.replace(/\s/g, '');
 
-    proposicoes.push({ id, tipo, numero, ano, autor, data, ementa });
+    proposicoes.push({ id, tipo, numero, ano, autor, data, ementa, url });
   }
 
   return proposicoes;
