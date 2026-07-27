@@ -1,5 +1,4 @@
 const fs = require('fs');
-const nodemailer = require('nodemailer');
 
 const EMAIL_DESTINO = process.env.EMAIL_DESTINO;
 const EMAIL_REMETENTE = process.env.EMAIL_REMETENTE;
@@ -11,6 +10,7 @@ const CONTROLE03_STATE_URL = process.env.CONTROLE03_STATE_URL || new URL('api/st
 const CONTROLE03_API_USER = process.env.CONTROLE03_API_USER || '';
 const CONTROLE03_API_PASS = process.env.CONTROLE03_API_PASS || '';
 const CONTROLE03_BASIC_AUTH = process.env.CONTROLE03_BASIC_AUTH || '';
+const CONTROLE03_FORCE_LATEST = String(process.env.CONTROLE03_FORCE_LATEST || '') === '1';
 
 
 // URL base da Câmara Legislativa do Distrito Federal — servidor Liferay, retorna HTML estático (sem reCAPTCHA)
@@ -104,7 +104,7 @@ function anotarClientesCitados(proposicoes) {
   for (const p of proposicoes || []) {
     const clientes = clientesCitadosNaProposicao(p);
     p.clientesCitados = clientes;
-    if (clientes.length && p.ementa && !String(p.ementa).includes('Cliente citado:')) {
+    if (clientes.length && p.ementa && !(String(p.ementa).includes('Cliente citado:') || String(p.ementa).includes('CLIENTE CITADO:'))) {
       p.ementa = String(p.ementa).trim() + ' | Cliente citado: ' + clientes.join(', ');
     }
   }
@@ -131,13 +131,13 @@ function mlDestacarTermosClienteEmail(texto, clientes) {
 
   const regex = new RegExp('(^|[^A-Za-zÀ-ÿ0-9])(' + nomes.map(mlEscapeRegExpClienteDestaque).join('|') + ')(?=[^A-Za-zÀ-ÿ0-9]|$)', 'gi');
   return mlEscapeHtmlClienteDestaque(texto).replace(regex, (match, prefixo, termo) => {
-    return prefixo + '<span style="background:#dbeafe;color:#1e3a8a;font-weight:700;border-radius:3px;padding:1px 3px">' + termo + '</span>';
+    return prefixo + '<span style="background:#fff1f2;color:#991b1b;font-weight:800;border:1px solid #fecdd3;border-radius:3px;padding:1px 4px">' + termo + '</span>';
   });
 }
 
 function renderizarEmentaCliente(p, renderBase) {
   const texto = String((p && p.ementa) || '-');
-  const partes = texto.split(/\s+\|\s+Cliente citado:\s+/i);
+  const partes = texto.split(/\s+\|\s+(?:🆘\s*)?CLIENTE CITADO:\s+|\s+\|\s+Cliente citado:\s+/i);
   const ementa = renderBase
     ? renderBase(partes[0])
     : mlDestacarTermosClienteEmail(partes[0], p && p.clientesCitados);
@@ -147,11 +147,29 @@ function renderizarEmentaCliente(p, renderBase) {
 
   if (!clientes) return ementa;
   return ementa + '<div style="margin-top:6px">' +
-    '<span style="display:inline-block;background:#eef6ff;border:1px solid #bfdbfe;color:#1e3a8a;border-radius:999px;padding:3px 8px;font-size:11px;font-weight:700">' +
-    'Cliente citado: ' + mlDestacarTermosClienteEmail(clientes, p && p.clientesCitados) +
+    '<span style="display:inline-block;background:#fff1f2;border:1px solid #fb7185;color:#991b1b;border-radius:999px;padding:4px 9px;font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:0">' +
+    '🆘 CLIENTE CITADO: ' + mlDestacarTermosClienteEmail(clientes, p && p.clientesCitados) +
     '</span></div>';
 }
 
+
+function clientesCitadosResumoEmail(novas) {
+  const nomes = [];
+  for (const p of novas || []) {
+    for (const nome of (Array.isArray(p && p.clientesCitados) ? p.clientesCitados : [])) {
+      if (nome && !nomes.some(n => n.toLowerCase() === String(nome).toLowerCase())) nomes.push(String(nome));
+    }
+  }
+  return nomes;
+}
+
+function assuntoEmailClienteCitado(novas, assuntoBase) {
+  const nomes = clientesCitadosResumoEmail(novas);
+  if (!nomes.length) return assuntoBase;
+  const lista = nomes.slice(0, 3).join(', ') + (nomes.length > 3 ? ' +' + (nomes.length - 3) : '');
+  const base = String(assuntoBase || '');
+  return base.startsWith('🆘') ? base : '🆘 Cliente citado: ' + lista + ' | ' + base;
+}
 
 function radar03Numero(p) {
   const numero = String(p?.numero ?? p?.numero_proposicao ?? p?.num ?? '').trim();
@@ -160,7 +178,6 @@ function radar03Numero(p) {
   if (numero.includes('/') || !ano) return numero;
   return numero + '/' + ano;
 }
-
 
 function radar03NumeroPartes(p) {
   const numeroRaw = String(p?.numero ?? p?.numero_proposicao ?? p?.num ?? '').trim();
@@ -214,7 +231,7 @@ function radar03TipoControle(tipo) {
     'PROPOSTA DE EMENDA A CONSTITUICAO': 'PEC', 'PEC': 'PEC',
     'PROJETO DE DECRETO LEGISLATIVO': 'PDL', 'PDL': 'PDL',
     'PROJETO DE RESOLUCAO': 'PR', 'PR': 'PR',
-    'INDICACAO': 'IND', 'MOCAO': 'MOC', 'REQUERIMENTO': 'REQ', 'REQ.': 'REQ',
+    'INDICACAO': 'IND', 'MOCAO': 'MOC', 'MO': 'MOC', 'REQUERIMENTO': 'REQ', 'REQ.': 'REQ',
     'REQUERIMENTO DE INFORMACAO': 'REQINF', 'RI': 'REQINF', 'VETO': 'VETO',
   };
   return mapa[normal] || String(tipo || '').trim().toUpperCase();
@@ -253,6 +270,8 @@ function radar03AgruparNovidades(novas) {
       ementa: String(p?.ementa || p?.resumo || p?.titulo || '').trim(),
       link: String(p?.link || p?.url || p?.fonte || p?.projeto_url || '').trim(),
       clienteSugestao: Array.isArray(p?.clientesCitados) ? p.clientesCitados.join(', ') : '',
+      clienteCitado: Array.isArray(p?.clientesCitados) && p.clientesCitados.length > 0,
+      clienteCitadoNomes: Array.isArray(p?.clientesCitados) ? p.clientesCitados.join(', ') : '',
     };
     let atual = porTipo.get(tipo);
     if (!atual) {
@@ -296,7 +315,7 @@ async function sincronizarRadar03(novas) {
     while (casa.week.length < 5) casa.week.push('off');
 
     resumo.forEach(rec => {
-      const detalhes = Array.isArray(rec.itens) && rec.itens.length ? rec.itens : [rec];
+      const detalhes = [rec];
       const existentesTipo = casa.items.filter(i => radar03TipoControle(i?.tipo || '') === rec.tipo);
       const baseAtual = existentesTipo.reduce((max, i) => {
         const n = Number.parseInt(String(i?.base || i?.mon || 0), 10) || 0;
@@ -324,6 +343,8 @@ async function sincronizarRadar03(novas) {
         item.ementa = det.ementa || item.ementa || '';
         item.link = det.link || item.link || '';
         item.clienteSugestao = det.clienteSugestao || item.clienteSugestao || '';
+        item.clienteCitado = Boolean(det.clienteCitado || item.clienteCitado);
+        item.clienteCitadoNomes = det.clienteCitadoNomes || item.clienteCitadoNomes || item.clienteSugestao || '';
         item.radar03Id = det.id || item.radar03Id || '';
         item.listaReal03 = true;
       });
@@ -351,10 +372,39 @@ async function sincronizarRadar03(novas) {
   }
 }
 
+async function filtrarNovidadesRadar03(proposicoes) {
+  if (!CONTROLE03_FORCE_LATEST) return proposicoes;
+  try {
+    const getResp = await fetch(CONTROLE03_STATE_URL, { headers: radar03AuthHeaders() });
+    if (!getResp.ok) throw new Error('GET ' + getResp.status);
+    const state = await getResp.json();
+    const data = Array.isArray(state.data) ? state.data : [];
+    const casa = data.find(item => item && item.casa === CASA_RADAR03);
+    const maxPorTipo = new Map();
+    for (const item of (casa && Array.isArray(casa.items) ? casa.items : [])) {
+      const tipo = radar03TipoControle(item?.tipo || '');
+      const numeros = [item?.base, item?.mon]
+        .map(valor => Number.parseInt(String(valor || 0), 10) || 0)
+        .filter(Boolean);
+      const atual = maxPorTipo.get(tipo) || 0;
+      maxPorTipo.set(tipo, Math.max(atual, ...numeros));
+    }
+    return (proposicoes || []).filter(p => {
+      const tipo = radar03TipoControle(p?.tipo || p?.sigla || p?.rotulo || '');
+      const partes = radar03NumeroPartes(p);
+      if (!tipo || !partes) return false;
+      return partes.numeroInt > (maxPorTipo.get(tipo) || 0);
+    });
+  } catch (err) {
+    console.warn('⚠️ Atualização forçada sem baseline central: ' + err.message);
+    return [];
+  }
+}
+
 function radar03ReviewUrl(novas) {
   const params = new URLSearchParams({
     casa: CASA_RADAR03,
-    bloco: radar03BlocoEmail(novas),
+    bloco: radar03AgruparNovidades(novas).map(item => item.tipo + ' ' + item.numero + (item.ano ? '/' + item.ano : '')).join(' | '),
     fonte: radar03PrimeiraFonte(novas),
   });
   return `${RADAR03_URL}?${params.toString()}`;
@@ -384,6 +434,7 @@ function renderRadar03EmailButton(novas) {
 
 
 async function enviarEmail(novas) {
+  const nodemailer = require('nodemailer');
   anotarClientesCitados(novas);
   const transporter = nodemailer.createTransport({
     service: 'gmail',
@@ -440,7 +491,7 @@ async function enviarEmail(novas) {
   await transporter.sendMail({
     from: `"Monitor Distrito Federal" <${EMAIL_REMETENTE}>`,
     to: EMAIL_DESTINO,
-    subject: `🏛️ Distrito Federal: ${novas.length} nova(s) proposição(ões) — ${new Date().toLocaleDateString('pt-BR')}`,
+    subject: assuntoEmailClienteCitado(novas, `🏛️ Distrito Federal: ${novas.length} nova(s) proposição(ões) — ${new Date().toLocaleDateString('pt-BR')}`),
     html,
   });
 
@@ -562,7 +613,9 @@ async function buscarProposicoes() {
     process.exit(0);
   }
 
-  const novas = proposicoes.filter(p => !idsVistos.has(p.id));
+  const novas = CONTROLE03_FORCE_LATEST
+    ? await filtrarNovidadesRadar03(proposicoes)
+    : proposicoes.filter(p => !idsVistos.has(p.id));
   console.log(`🆕 Proposições novas: ${novas.length}`);
 
   if (novas.length > 0) {
@@ -574,12 +627,18 @@ async function buscarProposicoes() {
     });
 
     await sincronizarRadar03(novas);
-    await enviarEmail(novas);
+    if (!CONTROLE03_FORCE_LATEST) {
+      await enviarEmail(novas);
+    } else {
+      console.log('📌 Atualização forçada da 03: email não enviado.');
+    }
 
-    novas.forEach(p => idsVistos.add(p.id));
-    estado.proposicoes_vistas = Array.from(idsVistos);
-    estado.ultima_execucao = new Date().toISOString();
-    salvarEstado(estado);
+    if (!CONTROLE03_FORCE_LATEST) {
+      novas.forEach(p => idsVistos.add(p.id));
+      estado.proposicoes_vistas = Array.from(idsVistos);
+      estado.ultima_execucao = new Date().toISOString();
+      salvarEstado(estado);
+    }
   } else {
     console.log('✅ Sem novidades. Nada a enviar.');
     estado.ultima_execucao = new Date().toISOString();
